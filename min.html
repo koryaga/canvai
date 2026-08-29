@@ -70,6 +70,89 @@ function updateCount() {
   countEl.textContent = a ? "накоплено: " + a + " аннот." : "";
 }
 
+// ---- 3. Аннотации ----------------------------------------------------------
+let nid = 0;
+
+function ensureId(el) {
+  if (!el.id) {
+    do { nid++; } while (document.getElementById("n" + nid));
+    el.id = "n" + nid;
+  }
+  return el.id;
+}
+
+function topLevel(node) {
+  let el = node && node.nodeType === 1 ? node : (node ? node.parentNode : null);
+  while (el && el.parentNode && el.parentNode !== app) el = el.parentNode;
+  return el && el.parentNode === app ? el : null;
+}
+
+function addAsk() {
+  const sel = document.getSelection();
+  let anchor = sel && sel.anchorNode && app.contains(sel.anchorNode)
+    ? topLevel(sel.anchorNode) : null;
+  if (!anchor) anchor = app.lastElementChild;
+  if (!anchor) {
+    anchor = document.createElement("p");
+    anchor.textContent = " ";
+    app.appendChild(anchor);
+  }
+  if (anchor.matches("[data-ask]")) return;
+
+  const id = ensureId(anchor);
+  const aside = document.createElement("aside");
+  aside.setAttribute("data-ask", "#" + id);
+  aside.setAttribute("contenteditable", "true");
+  anchor.after(aside);
+
+  const r = document.createRange();
+  r.selectNodeContents(aside);
+  r.collapse(true);
+  const s = document.getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+  aside.focus();
+  updateCount();
+  return aside;
+}
+
+function collectAsks() {
+  const out = [];
+  const nodes = Array.prototype.slice.call(app.querySelectorAll("[data-ask]"));
+  for (const a of nodes) {
+    const text = a.textContent.replace(/\s+/g, " ").trim();
+    if (text) out.push("[к " + a.getAttribute("data-ask") + "] " + text);
+    a.remove();
+  }
+  return out;
+}
+
+// ---- 4. Диф ----------------------------------------------------------------
+function clip(s) {
+  s = String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+  return s.length > CUT ? s.slice(0, CUT) + "…" : s;
+}
+
+function diffLines() {
+  return [];   // ПРАВКИ ДОКУМЕНТА появятся в задаче 5
+}
+
+// Атомарный блок (§6): сборка дифа, снятие аннотаций и пересев базовой линии
+// идут подряд, без единого await. Иначе человек успеет набрать в промежутке.
+function takeDiff() {
+  const lines = diffLines();
+  const asks  = collectAsks();
+  updateCount();
+  return { asks: asks, lines: lines };
+}
+
+function turnMessage(d) {
+  const parts = [];
+  if (d.asks.length)  parts.push("ИНСТРУКЦИИ (" + d.asks.length + "):\n" + d.asks.join("\n"));
+  if (d.lines.length) parts.push("ПРАВКИ ДОКУМЕНТА (" + d.lines.length + "):\n" + d.lines.join("\n"));
+  return parts.length ? parts.join("\n\n") : "Человек отправил ход, ничего не изменив.";
+}
+
 // ---- 5. Исполнение ---------------------------------------------------------
 function serialize(v) {
   if (v === undefined) return "ok";
@@ -132,6 +215,36 @@ function checkFrame() {
   }
   return ok;
 }
+
+// ---- 6. Петля --------------------------------------------------------------
+function commit() {
+  const msg = turnMessage(takeDiff());
+  log("ход", msg);
+}
+
+// ---- 7. Привязки -----------------------------------------------------------
+app.addEventListener("contextmenu", function (e) {
+  if (e.shiftKey) return;            // Shift оставляет родное меню браузера
+  e.preventDefault();
+  addAsk();
+});
+
+app.addEventListener("keydown", function (e) {
+  if ((e.ctrlKey || e.metaKey) && e.key === "/") { e.preventDefault(); addAsk(); return; }
+  if (e.key === "Escape") {
+    const t = e.target;
+    const a = t && t.closest ? t.closest("[data-ask]") : null;
+    if (a && !a.textContent.trim()) { e.preventDefault(); a.remove(); app.focus(); updateCount(); }
+  }
+});
+
+app.addEventListener("input", updateCount);
+
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
+});
+
+sendBtn.addEventListener("click", function () { commit(); });
 
 log("старт", "каркас поднят");
 </script>
