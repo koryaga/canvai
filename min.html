@@ -70,5 +70,68 @@ function updateCount() {
   countEl.textContent = a ? "накоплено: " + a + " аннот." : "";
 }
 
+// ---- 5. Исполнение ---------------------------------------------------------
+function serialize(v) {
+  if (v === undefined) return "ok";
+  if (typeof v === "string") return v;
+  if (v instanceof Node) {
+    return v.outerHTML !== undefined ? v.outerHTML : String(v.textContent);
+  }
+  if (v instanceof NodeList || Array.isArray(v)) {
+    return Array.from(v).map(function (x) {
+      if (x instanceof Node) return x.outerHTML !== undefined ? x.outerHTML : String(x.textContent);
+      try { return JSON.stringify(x); } catch (e) { return String(x); }
+    }).join("\n");
+  }
+  try {
+    const s = JSON.stringify(v);
+    return s === undefined ? String(v) : s;
+  } catch (e) {
+    return String(v);
+  }
+}
+
+function cut(s) {
+  s = String(s);
+  return s.length > MAX_RESULT
+    ? s.slice(0, MAX_RESULT) + "\n… обрезано, всего " + s.length + " симв."
+    : s;
+}
+
+function errText(e) {
+  const name = e && e.name ? e.name : "Error";
+  const msg  = e && e.message ? e.message : String(e);
+  const head = name + ": " + msg;
+  const st   = e && e.stack ? String(e.stack).split("\n").slice(1, 4).join("\n") : "";
+  return st ? head + "\n" + st : head;
+}
+
+function exec(code) {
+  const fn = new Function("return (async () => {" + code + "})()");
+  return fn();
+}
+
+async function runTool(code) {
+  try {
+    const v = await exec(code);
+    return { text: cut(serialize(v)), err: null };
+  } catch (e) {
+    return { text: cut(errText(e)), err: e };
+  }
+}
+
+function checkFrame() {
+  const ok = document.getElementById("app")   === app
+          && document.getElementById("store") === store
+          && document.getElementById("io")    === io
+          && document.getElementById("debug") === debugEl
+          && app.isConnected && store.isConnected && io.isConnected && debugEl.isConnected;
+  if (!ok) {
+    alert("Каркас страницы разрушен. Перезагружаю.");
+    location.reload();
+  }
+  return ok;
+}
+
 log("старт", "каркас поднят");
 </script>
