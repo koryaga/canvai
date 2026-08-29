@@ -38,9 +38,9 @@
 "use strict";
 
 // ---- 0. Конфиг -------------------------------------------------------------
-const API_URL = "";   // OpenAI-совместимый /chat/completions
-const API_KEY = "";
-const MODEL   = "";
+const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const API_KEY = "";   // вписывает человек, в git не уходит
+const MODEL   = "nvidia/nemotron-3-ultra-550b-a55b:free";
 
 const MAX_ITERS  = 12;
 const MAX_RESULT = 4000;
@@ -225,9 +225,150 @@ function checkFrame() {
 }
 
 // ---- 6. Петля --------------------------------------------------------------
-function commit() {
+const SYSTEM = `Ты работаешь внутри одной HTML-страницы. Твоё единственное действие — инструмент page_exec: он выполняет переданный JavaScript в этой странице и возвращает тебе то значение, которое вернул код.
+
+Снимок страницы тебе не присылают никогда. Нужно знать состояние — прочитай его сам вызовом page_exec.
+
+Карта страницы:
+- #app — канва, contenteditable. Это одновременно документ человека и твой ответ ему. Ответ человеку — то, что записано сюда, а не текст твоего сообщения.
+- #store — скрытый слой данных (hidden). Состояние держи здесь, а не в вёрстке #app.
+- #io и #debug — каркас системы. Не трогай их и не трогай body целиком.
+
+Ход человека приходит двумя разделами:
+- ИНСТРУКЦИИ — задание, привязанное к узлу. Это то, что от тебя хотят.
+- ПРАВКИ ДОКУМЕНТА — новое состояние текста после правок человека. Обычно контекст, действия не требует.
+Аннотации к этому моменту уже сняты со страницы, восстанавливать их не нужно.
+
+Правила:
+- Состояние переживает ход. Не перевыводи то, что уже записано на странице.
+- Вешай id на узлы, которые собираешься читать в следующих ходах.
+- Интерактивные элементы (кнопки, поля) оборачивай в contenteditable="false", иначе клик по ним поставит каретку вместо нажатия.
+- Всегда проверяй результат querySelector на null: каретка человека ломает структуру и уносит id.
+- Текст, набранный человеком в input, живёт в свойстве .value, а не в разметке — в outerHTML его не видно. Читай .value и .checked.
+- Если код бросил исключение, ты получишь его текстом. Это штатный способ починиться: поправь код и повтори.`;
+
+const TOOLS = [{
+  type: "function",
+  function: {
+    name: "page_exec",
+    description: "Выполнить JavaScript в текущей странице. Возвращает значение, которое вернул код.",
+    parameters: {
+      type: "object",
+      properties: { code: { type: "string" } },
+      required: ["code"]
+    }
+  }
+}];
+
+const messages = [{ role: "system", content: SYSTEM }];
+let busy = false;
+let ctl = null;
+
+function setBusy(v) {
+  busy = v;
+  stateEl.textContent = v ? "работает" : "готов";
+  sendBtn.disabled = v;
+  stopBtn.disabled = !v;
+}
+
+async function callModel(extra) {
+  const body = { model: MODEL, messages: messages, tools: TOOLS };
+  if (extra) Object.assign(body, extra);
+  const r = await fetch(API_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": "Bearer " + API_KEY },
+    body: JSON.stringify(body),
+    signal: ctl.signal
+  });
+  if (!r.ok) {
+    const t = await r.text();
+    throw new Error("HTTP " + r.status + ": " + t.slice(0, 500));
+  }
+  return await r.json();
+}
+
+async function runTurn() {
+  let lastSig = "";
+  let same = 0;
+
+  for (let i = 1; i <= MAX_ITERS + 1; i++) {
+    const last = i > MAX_ITERS;
+    if (last) {
+      messages.push({
+        role: "user",
+        content: "Лимит итераций исчерпан. Заверши ход: коротко скажи, что сделано и что осталось."
+      });
+      log("предел", "MAX_ITERS исчерпан, финальный вызов с tool_choice: none");
+    }
+
+    const data = await callModel(last ? { tool_choice: "none" } : null);
+    const ch = data.choices && data.choices[0];
+    if (!ch) { log("сбой", "ответ без choices: " + JSON.stringify(data).slice(0, 500)); return; }
+
+    const m = ch.message || {};
+    const fin = ch.finish_reason;
+    const calls = m.tool_calls || [];
+    messages.push(m);
+    if (m.content) log("текст", m.content);
+
+    // Отклонение от §7: критерий — непустой tool_calls. finish_reason у
+    // OpenAI-совместимых клонов часто врёт; расхождение фиксируем в журнале.
+    if (calls.length && fin !== "tool_calls") {
+      log("провайдер", "tool_calls непуст, но finish_reason = " + fin);
+    }
+    if (!calls.length) { log("ход", "завершён, finish_reason = " + fin); return; }
+
+    for (const c of calls) {
+      let code = null;
+      try {
+        code = JSON.parse(c.function.arguments).code;
+      } catch (e) {
+        const out = "Не удалось разобрать аргументы вызова: " + errText(e) +
+                    "\nВероятно, ответ оборвался по лимиту токенов. Пришли код короче.";
+        log("аргументы", out);
+        messages.push({ role: "tool", tool_call_id: c.id, content: out });
+        continue;
+      }
+
+      log("exec", code);
+      const res = await runTool(code);
+      log(res.err ? "ошибка" : "результат", res.text);
+      messages.push({ role: "tool", tool_call_id: c.id, content: res.text });
+
+      if (res.err) {
+        const sig = (res.err.name || "Error") + ": " + (res.err.message || "");
+        if (sig === lastSig) same++; else { lastSig = sig; same = 1; }
+        if (same >= 3) {
+          log("стоп", "три одинаковых исключения подряд, ход завершён принудительно");
+          return;
+        }
+      } else {
+        lastSig = ""; same = 0;
+      }
+
+      if (!checkFrame()) return;
+    }
+
+    if (last) return;
+  }
+}
+
+async function commit() {
+  if (busy) return;
   const msg = turnMessage(takeDiff());
   log("ход", msg);
+  messages.push({ role: "user", content: msg });
+  ctl = new AbortController();
+  setBusy(true);
+  try {
+    await runTurn();
+  } catch (e) {
+    if (e && e.name === "AbortError") log("стоп", "ход прерван человеком");
+    else log("сбой", errText(e));
+  } finally {
+    setBusy(false);
+    ctl = null;
+  }
 }
 
 // ---- 7. Привязки -----------------------------------------------------------
@@ -253,6 +394,8 @@ document.addEventListener("keydown", function (e) {
 });
 
 sendBtn.addEventListener("click", function () { commit(); });
+
+stopBtn.addEventListener("click", function () { if (ctl) ctl.abort(); });
 
 log("старт", "каркас поднят");
 </script>
