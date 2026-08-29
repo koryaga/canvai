@@ -67,8 +67,84 @@ function log(kind, text) {
 
 function updateCount() {
   const a = app.querySelectorAll("[data-ask]").length;
-  countEl.textContent = a ? "накоплено: " + a + " аннот." : "";
+  const d = buf.size + adds.length + dels.length;
+  const p = [];
+  if (a) p.push(a + " аннот.");
+  if (d) p.push(d + " правок");
+  countEl.textContent = p.length ? "накоплено: " + p.join(", ") : "";
 }
+
+// ---- 2. Наблюдатель --------------------------------------------------------
+let execWindow = false;
+
+// §4.4: Map коалесцирует только characterData и attributes — там «старое»
+// протухает к моменту разбора записи. У childList старое значение лежит
+// в самой записи, коалесцировать его нельзя: потеряются отдельные узлы.
+const buf  = new Map();
+const adds = [];
+const dels = [];
+
+function inAsk(node) {
+  const el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+  return !!(el && el.closest && el.closest("[data-ask]"));
+}
+
+// §4.6: #id, если есть; иначе путь tag:nth-of-type(n) вверх до ближайшего
+// предка с id, с префиксом #app. Текстовый узел адресуется родителем.
+function pathOf(node) {
+  let el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
+  if (!el) return "?";
+  const parts = [];
+  while (el && el !== app) {
+    if (el.id) { parts.unshift("#" + el.id); return parts.join(" > "); }
+    const tag = el.tagName.toLowerCase();
+    let n = 1;
+    for (let s = el.previousElementSibling; s; s = s.previousElementSibling) {
+      if (s.tagName === el.tagName) n++;
+    }
+    parts.unshift(tag + ":nth-of-type(" + n + ")");
+    el = el.parentElement;
+  }
+  parts.unshift("#app");
+  return parts.join(" > ");
+}
+
+function nodeBrief(n) {
+  if (n.nodeType === 1) return clip(n.outerHTML);
+  return "«" + clip(n.textContent) + "»";
+}
+
+// §4.2: записи, пришедшие внутри окна исполнения, отбрасываются — это правки
+// модели. Атрибуция по окну, а не по isTrusted: innerHTML событий не порождает.
+function process(records) {
+  if (execWindow) return;
+  for (const r of records) {
+    if (inAsk(r.target)) continue;          // §5: набор в аннотации — не правка документа
+
+    if (r.type === "childList") {
+      for (const n of r.addedNodes)   { if (!inAsk(n)) adds.push({ where: pathOf(r.target), what: nodeBrief(n) }); }
+      for (const n of r.removedNodes) { if (!inAsk(n)) dels.push({ where: pathOf(r.target), what: nodeBrief(n) }); }
+    } else if (r.type === "characterData") {
+      const k = "text|" + pathOf(r.target);
+      if (!buf.has(k)) buf.set(k, { kind: "text", path: pathOf(r.target), node: r.target, old: clip(r.oldValue) });
+    } else if (r.type === "attributes") {
+      const k = "attr|" + pathOf(r.target) + "|" + r.attributeName;
+      if (!buf.has(k)) buf.set(k, { kind: "attr", path: pathOf(r.target), node: r.target, name: r.attributeName, old: clip(r.oldValue) });
+    }
+  }
+  updateCount();
+}
+
+const observer = new MutationObserver(process);
+observer.observe(app, {
+  childList: true, subtree: true, characterData: true,
+  attributes: true, attributeOldValue: true, characterDataOldValue: true
+});
+
+// §4.5: takeRecords() очищает очередь. Результат обязан пройти через process,
+// иначе правки последнего такта пропадут молча. Внутри окна process сам их
+// выбросит — это и есть «результат в мусор» из §4.2.
+function drain() { process(observer.takeRecords()); }
 
 // ---- 3. Аннотации ----------------------------------------------------------
 let nid = 0;
@@ -142,14 +218,44 @@ function clip(s) {
 }
 
 function diffLines() {
-  return [];   // ПРАВКИ ДОКУМЕНТА появятся в задаче 5
+  const out = [];
+  for (const e of buf.values()) {
+    if (e.kind === "text") {
+      const now = clip(e.node.nodeValue);
+      if (now !== e.old) out.push(e.path + " текст: «" + e.old + "» → «" + now + "»");
+    } else if (e.kind === "attr") {
+      const now = clip(e.node.getAttribute ? e.node.getAttribute(e.name) : "");
+      if (now !== e.old) out.push(e.path + " @" + e.name + ": «" + e.old + "» → «" + now + "»");
+    }
+  }
+  for (const a of adds) out.push(a.where + " + " + a.what);
+  for (const d of dels) out.push(d.where + " − " + d.what);
+
+  buf.clear();
+  adds.length = 0;
+  dels.length = 0;
+
+  if (out.length > MAX_DIFF) {
+    const n = out.length;
+    out.length = MAX_DIFF;
+    out.push("… ещё " + (n - MAX_DIFF) + " правок не показано");
+  }
+  return out;
 }
 
-// Атомарный блок (§6): сборка дифа, снятие аннотаций и пересев базовой линии
-// идут подряд, без единого await. Иначе человек успеет набрать в промежутке.
+// Атомарный блок (§6): ни одного await между добором записей и снятием
+// аннотаций. Иначе человек успеет набрать в промежутке, и текст пропадёт.
 function takeDiff() {
-  const lines = diffLines();
-  const asks  = collectAsks();
+  drain();                       // 1. добираем правки человека последнего такта
+  const lines = diffLines();     // 2. собираем диф и чистим буферы
+  execWindow = true;             // 3. снятие аннотаций — правка системы, не человека
+  let asks;
+  try {
+    asks = collectAsks();
+  } finally {
+    drain();                     // execWindow ещё true → записи об удалении в мусор
+    execWindow = false;
+  }
   updateCount();
   return { asks: asks, lines: lines };
 }
@@ -203,11 +309,15 @@ function exec(code) {
 }
 
 async function runTool(code) {
+  execWindow = true;
   try {
     const v = await exec(code);
     return { text: cut(serialize(v)), err: null };
   } catch (e) {
     return { text: cut(errText(e)), err: e };
+  } finally {
+    drain();            // §4.2: колбэк наблюдателя асинхронный — доберём и выбросим
+    execWindow = false; // до снятия флага, иначе правки модели спишутся на человека
   }
 }
 
