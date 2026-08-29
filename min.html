@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>DOM-агент</title>
+<style>
+  body { margin: 0; font: 15px/1.55 system-ui, -apple-system, sans-serif; }
+  #app { min-height: 60vh; padding: 16px 20px; outline: none; }
+  #io { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center;
+        padding: 8px 20px; background: #f2f2f2; border-top: 1px solid #d8d8d8; }
+  #io .grow { flex: 1; }
+  #state { font-weight: 600; }
+  #count { color: #666; font-size: 13px; }
+  #debug { padding: 6px 20px 20px; background: #fbfbfb; border-top: 1px solid #e4e4e4;
+           font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #log { white-space: pre-wrap; max-height: 45vh; overflow: auto; }
+  #log > div { padding: 2px 0; border-bottom: 1px solid #efefef; }
+  aside[data-ask] { display: block; margin: 6px 0 6px 28px; padding: 6px 10px;
+                    background: #fff7c2; border-left: 3px solid #dcbf14;
+                    font-size: 14px; border-radius: 3px; }
+  aside[data-ask]::before { content: attr(data-ask) " "; color: #9a8600; font-size: 12px; }
+</style>
+
+<div id="app" contenteditable="true" spellcheck="false"></div>
+<div id="store" hidden></div>
+<div id="io">
+  <span id="state">готов</span>
+  <span id="count"></span>
+  <span class="grow"></span>
+  <button id="send" type="button">отправить</button>
+  <button id="stop" type="button" disabled>стоп</button>
+</div>
+<details id="debug" open>
+  <summary>журнал</summary>
+  <div id="log"></div>
+</details>
+
+<script>
+"use strict";
+
+// ---- 0. Конфиг -------------------------------------------------------------
+const API_URL = "";   // OpenAI-совместимый /chat/completions
+const API_KEY = "";
+const MODEL   = "";
+
+const MAX_ITERS  = 12;
+const MAX_RESULT = 4000;
+const MAX_DIFF   = 60;
+const CUT        = 200;
+
+// ---- 1. Каркас -------------------------------------------------------------
+const app     = document.getElementById("app");
+const store   = document.getElementById("store");
+const io      = document.getElementById("io");
+const debugEl = document.getElementById("debug");
+const logEl   = document.getElementById("log");
+const stateEl = document.getElementById("state");
+const countEl = document.getElementById("count");
+const sendBtn = document.getElementById("send");
+const stopBtn = document.getElementById("stop");
+
+function log(kind, text) {
+  const line = document.createElement("div");
+  line.textContent = "[" + kind + "] " + text;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateCount() {
+  const a = app.querySelectorAll("[data-ask]").length;
+  countEl.textContent = a ? "накоплено: " + a + " аннот." : "";
+}
+
+log("старт", "каркас поднят");
+</script>
