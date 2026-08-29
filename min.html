@@ -287,6 +287,17 @@ async function callModel(extra) {
   return await r.json();
 }
 
+// Ход может оборваться посреди пачки вызовов, а messages переживает ход.
+// Вызов без ответного tool-сообщения делает КАЖДЫЙ следующий запрос сессии
+// невалидным: провайдер видит assistant.tool_calls, на который не хватает
+// ответов, и отвечает 400 на ходах, выглядящих непричастными.
+function closeBatch(calls, after) {
+  for (const rest of calls.slice(calls.indexOf(after) + 1)) {
+    messages.push({ role: "tool", tool_call_id: rest.id || "unknown",
+                    content: "Ход завершён принудительно, вызов не выполнен." });
+  }
+}
+
 async function runTurn() {
   let lastSig = "";
   let same = 0;
@@ -326,20 +337,32 @@ async function runTurn() {
         const out = "Не удалось разобрать аргументы вызова: " + errText(e) +
                     "\nВероятно, ответ оборвался по лимиту токенов. Пришли код короче.";
         log("аргументы", out);
-        messages.push({ role: "tool", tool_call_id: c.id, content: out });
+        messages.push({ role: "tool", tool_call_id: c.id || "unknown", content: out });
+        continue;
+      }
+
+      // Аргументы разобрались, но поля code нет: runTool(undefined) вернул бы
+      // "ok", и модель сочла бы вызов успешным. Снимка страницы она не получает
+      // и уличить ложь не сможет.
+      if (typeof code !== "string") {
+        const out = "В аргументах вызова нет строкового поля code. " +
+                    "Повтори вызов, положив код в поле code.";
+        log("аргументы", out);
+        messages.push({ role: "tool", tool_call_id: c.id || "unknown", content: out });
         continue;
       }
 
       log("exec", code);
       const res = await runTool(code);
       log(res.err ? "ошибка" : "результат", res.text);
-      messages.push({ role: "tool", tool_call_id: c.id, content: res.text });
+      messages.push({ role: "tool", tool_call_id: c.id || "unknown", content: res.text });
 
       if (res.err) {
         const sig = (res.err.name || "Error") + ": " + (res.err.message || "");
         if (sig === lastSig) same++; else { lastSig = sig; same = 1; }
         if (same >= 3) {
           log("стоп", "три одинаковых исключения подряд, ход завершён принудительно");
+          closeBatch(calls, c);
           return;
         }
       } else {
