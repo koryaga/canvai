@@ -160,6 +160,47 @@ observer.observe(app, {
 // выбросит — это и есть «результат в мусор» из §4.2.
 function drain() { process(observer.takeRecords()); }
 
+// §4.3: .value и .checked невидимы для MutationObserver. Отдельные слушатели —
+// единственный способ увидеть, что человек заполнил поле.
+function fieldValue(el) {
+  return (el.type === "checkbox" || el.type === "radio")
+    ? String(el.checked) : String(el.value);
+}
+
+app.addEventListener("focusin", function (e) {
+  const el = e.target;
+  if (el && el.matches && el.matches("input,select,textarea")) el.__was = fieldValue(el);
+}, true);
+
+function fieldChanged(e) {
+  // Программная установка .value событий не порождает, так что фильтр
+  // отсекает только синтетику из кода модели.
+  if (!e.isTrusted) return;
+  const el = e.target;
+  if (!el || !el.matches || !el.matches("input,select,textarea")) return;
+  if (inAsk(el)) return;
+  const k = "field|" + pathOf(el);
+  if (!buf.has(k)) {
+    buf.set(k, {
+      kind:  "field",
+      path:  pathOf(el),
+      node:  el,
+      check: el.type === "checkbox" || el.type === "radio",
+      old:   raw(el.__was === undefined ? "" : el.__was)
+    });
+  }
+  updateCount();
+}
+
+app.addEventListener("input",  fieldChanged, true);
+app.addEventListener("change", fieldChanged, true);
+
+// Пересев базовой линии: после отправки хода текущие значения полей становятся
+// «старыми», иначе следующий ход повторит ту же правку.
+function reseat() {
+  for (const el of app.querySelectorAll("input,select,textarea")) el.__was = fieldValue(el);
+}
+
 // ---- 3. Аннотации ----------------------------------------------------------
 let nid = 0;
 
@@ -251,6 +292,12 @@ function diffLines() {
       if (now !== e.old) {
         out.push(e.path + " @" + e.name + ": «" + clip(e.old) + "» → «" + clip(now) + "»");
       }
+    } else if (e.kind === "field") {
+      const now = raw(fieldValue(e.node));
+      if (now !== e.old) {
+        out.push(e.path + (e.check ? " галочка: «" : " поле: «") +
+                 clip(e.old) + "» → «" + clip(now) + "»");
+      }
     }
   }
   for (const a of adds) out.push(a.where + " + " + a.what);
@@ -277,6 +324,7 @@ function takeDiff() {
   let asks;
   try {
     asks = collectAsks();
+    reseat();                    // §6: пересев базовой линии — в том же блоке
   } finally {
     drain();                     // execWindow ещё true → записи об удалении в мусор
     execWindow = false;
