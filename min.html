@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <meta charset="utf-8">
-<title>DOM-агент</title>
+<title>DOM Agent</title>
 <style>
   body { margin: 0; font: 15px/1.55 system-ui, -apple-system, sans-serif; }
   #app { min-height: 60vh; padding: 16px 20px; outline: none; }
@@ -23,24 +23,24 @@
 <div id="app" contenteditable="true" spellcheck="false"></div>
 <div id="store" hidden></div>
 <div id="io">
-  <span id="state">готов</span>
+  <span id="state">ready</span>
   <span id="count"></span>
   <span class="grow"></span>
-  <button id="send" type="button">отправить</button>
-  <button id="stop" type="button" disabled>стоп</button>
+  <button id="send" type="button">send</button>
+  <button id="stop" type="button" disabled>stop</button>
 </div>
 <details id="debug" open>
-  <summary>журнал</summary>
+  <summary>log</summary>
   <div id="log"></div>
 </details>
 
 <script>
 "use strict";
 
-// ---- 0. Конфиг -------------------------------------------------------------
+// ---- 0. Config -------------------------------------------------------------
 const API_URL = "https://api.deepseek.com/v1/chat/completions";
-const API_KEY = "";   // min.html ОТСЛЕЖИВАЕТСЯ git. Ключ вписывать в копию
-                      // min.local.html (она в .gitignore) либо очищать перед коммитом.
+const API_KEY = "";   // min.html IS TRACKED by git. Put the working key in the
+                      // min.local.html copy (gitignored), or blank it before committing.
 const MODEL   = "deepseek-v4-flash";
 
 const MAX_ITERS  = 12;
@@ -48,7 +48,7 @@ const MAX_RESULT = 4000;
 const MAX_DIFF   = 60;
 const CUT        = 200;
 
-// ---- 1. Каркас -------------------------------------------------------------
+// ---- 1. Scaffolding --------------------------------------------------------
 const app     = document.getElementById("app");
 const store   = document.getElementById("store");
 const io      = document.getElementById("io");
@@ -70,17 +70,18 @@ function updateCount() {
   const a = app.querySelectorAll("[data-ask]").length;
   const d = buf.size + adds.length + dels.length;
   const p = [];
-  if (a) p.push(a + " аннот.");
-  if (d) p.push(d + " правок");
-  countEl.textContent = p.length ? "накоплено: " + p.join(", ") : "";
+  if (a) p.push(a + " note(s)");
+  if (d) p.push(d + " edit(s)");
+  countEl.textContent = p.length ? "pending: " + p.join(", ") : "";
 }
 
-// ---- 2. Наблюдатель --------------------------------------------------------
+// ---- 2. Observer -----------------------------------------------------------
 let execWindow = false;
 
-// §4.4: Map коалесцирует только characterData и attributes — там «старое»
-// протухает к моменту разбора записи. У childList старое значение лежит
-// в самой записи, коалесцировать его нельзя: потеряются отдельные узлы.
+// §4.4: the Map coalesces characterData and attributes only — for those the
+// "old" value goes stale by the time the record is handled. For childList the
+// old state lives in the record itself, and coalescing it by path would merge
+// distinct added or removed nodes into one.
 const buf  = new Map();
 const adds = [];
 const dels = [];
@@ -90,13 +91,14 @@ function inAsk(node) {
   return !!(el && el.closest && el.closest("[data-ask]"));
 }
 
-// Сырое значение для СРАВНЕНИЯ. clip() режет на CUT и схлопывает пробелы, и
-// две по-настоящему разные строки, расходящиеся после 200-го символа, дают
-// равенство — правка человека молча пропадает. Клипаем только на вывод.
+// Raw value, for COMPARISON. clip() truncates at CUT and collapses whitespace,
+// so two genuinely different strings that diverge past character 200 compare
+// equal — and the human's edit vanishes with no trace. Clip for display only.
 function raw(v) { return v == null ? "" : String(v); }
 
-// §4.6: #id, если есть; иначе путь tag:nth-of-type(n) вверх до ближайшего
-// предка с id, с префиксом #app. Текстовый узел адресуется родителем.
+// §4.6: #id when present; otherwise a tag:nth-of-type(n) chain up to the
+// nearest ancestor with an id, prefixed #app. A text node is addressed by its
+// parent.
 function pathOf(node) {
   let el = node && node.nodeType === 1 ? node : (node ? node.parentElement : null);
   if (!el) return "?";
@@ -120,26 +122,28 @@ function nodeBrief(n) {
   return "«" + clip(n.textContent) + "»";
 }
 
-// §4.2: записи, пришедшие внутри окна исполнения, отбрасываются — это правки
-// модели. Атрибуция по окну, а не по isTrusted: innerHTML событий не порождает.
+// §4.2: records arriving inside the execution window are discarded — those are
+// the model's edits. Attribution is by window, not by isTrusted: innerHTML
+// produces no events at all.
 function process(records) {
   if (execWindow) return;
   for (const r of records) {
-    if (inAsk(r.target)) continue;          // §5: набор в аннотации — не правка документа
+    if (inAsk(r.target)) continue;      // §5: typing in a note is not a document edit
 
     if (r.type === "childList") {
       for (const n of r.addedNodes)   { if (!inAsk(n)) adds.push({ where: pathOf(r.target), what: nodeBrief(n) }); }
       for (const n of r.removedNodes) { if (!inAsk(n)) dels.push({ where: pathOf(r.target), what: nodeBrief(n) }); }
     } else if (r.type === "characterData") {
-      // Ключ — сам узел, а не путь: pathOf адресует текстовый узел родителем,
-      // и два текстовых потомка одного элемента (<p>начало <b>ж</b> конец</p>)
-      // схлопнулись бы в один ключ, потеряв вторую правку без следа.
+      // Key by the node itself, not by path: pathOf addresses a text node by
+      // its parent, so two text children of one element
+      // (<p>start <b>b</b> end</p>) would collapse into a single key and the
+      // second edit would be lost without a trace.
       if (!buf.has(r.target)) {
         buf.set(r.target, { kind: "text", path: pathOf(r.target), node: r.target,
                             old: raw(r.oldValue) });
       }
     } else if (r.type === "attributes") {
-      // Элементы адресуются путём однозначно, здесь коллизии нет.
+      // Elements are addressed unambiguously by path, so no collision here.
       const k = "attr|" + pathOf(r.target) + "|" + r.attributeName;
       if (!buf.has(k)) {
         buf.set(k, { kind: "attr", path: pathOf(r.target), node: r.target,
@@ -156,13 +160,13 @@ observer.observe(app, {
   attributes: true, attributeOldValue: true, characterDataOldValue: true
 });
 
-// §4.5: takeRecords() очищает очередь. Результат обязан пройти через process,
-// иначе правки последнего такта пропадут молча. Внутри окна process сам их
-// выбросит — это и есть «результат в мусор» из §4.2.
+// §4.5: takeRecords() CLEARS the queue. Its result must go through process(),
+// or the last tick's human edits are silently lost. Inside the window process()
+// discards them itself — that is the "throw the result away" of §4.2.
 function drain() { process(observer.takeRecords()); }
 
-// §4.3: .value и .checked невидимы для MutationObserver. Отдельные слушатели —
-// единственный способ увидеть, что человек заполнил поле.
+// §4.3: .value and .checked are invisible to MutationObserver. Dedicated
+// listeners are the only way to see that the human filled a field in.
 function fieldValue(el) {
   return (el.type === "checkbox" || el.type === "radio")
     ? String(el.checked) : String(el.value);
@@ -174,8 +178,8 @@ app.addEventListener("focusin", function (e) {
 }, true);
 
 function fieldChanged(e) {
-  // Программная установка .value событий не порождает, так что фильтр
-  // отсекает только синтетику из кода модели.
+  // Programmatic assignment to .value fires no events, so this filter rejects
+  // only synthetic events coming from the model's own code.
   if (!e.isTrusted) return;
   const el = e.target;
   if (!el || !el.matches || !el.matches("input,select,textarea")) return;
@@ -196,13 +200,13 @@ function fieldChanged(e) {
 app.addEventListener("input",  fieldChanged, true);
 app.addEventListener("change", fieldChanged, true);
 
-// Пересев базовой линии: после отправки хода текущие значения полей становятся
-// «старыми», иначе следующий ход повторит ту же правку.
+// Reseat the baseline: once a turn is sent, current field values become the
+// "old" ones, or the next turn repeats the same edit.
 function reseat() {
   for (const el of app.querySelectorAll("input,select,textarea")) el.__was = fieldValue(el);
 }
 
-// ---- 3. Аннотации ----------------------------------------------------------
+// ---- 3. Notes --------------------------------------------------------------
 let nid = 0;
 
 function ensureId(el) {
@@ -220,16 +224,16 @@ function topLevel(node) {
 }
 
 function addAsk() {
-  drain();                           // чужие записи забираем ДО подъёма окна,
-  const prevWindow = execWindow;     // ход модели мог поднять окно: канва во
-  execWindow = true;                 // время хода не заблокирована, человек
-  try {                              // может поставить аннотацию посреди него
+  drain();                           // take other records BEFORE raising the
+  const prevWindow = execWindow;     // window. A model turn may have raised it:
+  execWindow = true;                 // the canvas is not blocked during a turn,
+  try {                              // so the human can add a note mid-turn.
     const sel = document.getSelection();
     const from = sel && sel.anchorNode && app.contains(sel.anchorNode) ? sel.anchorNode : null;
     let anchor = from ? topLevel(from) : null;
-    // Голый текстовый узел прямо в #app: так Chrome держит первую строку, пока
-    // человек не нажал Enter. Прямого потомка-элемента нет, а якорю нужен узел,
-    // который унесёт id — оборачиваем в <p> на месте.
+    // A bare text node directly under #app: that is how Chrome keeps the first
+    // line until the human presses Enter. There is no element child, and the
+    // anchor needs a node that can carry an id — wrap it in a <p> in place.
     if (!anchor && from && from.nodeType === 3 && from.parentNode === app) {
       anchor = document.createElement("p");
       from.before(anchor);
@@ -259,7 +263,7 @@ function addAsk() {
     updateCount();
     return aside;
   } finally {
-    drain();                         // записи о собственных правках — в мусор
+    drain();                         // records of our own edits go to the bin
     execWindow = prevWindow;
   }
 }
@@ -269,13 +273,13 @@ function collectAsks() {
   const nodes = Array.prototype.slice.call(app.querySelectorAll("[data-ask]"));
   for (const a of nodes) {
     const text = a.textContent.replace(/\s+/g, " ").trim();
-    if (text) out.push("[к " + a.getAttribute("data-ask") + "] " + text);
+    if (text) out.push("[on " + a.getAttribute("data-ask") + "] " + text);
     a.remove();
   }
   return out;
 }
 
-// ---- 4. Диф ----------------------------------------------------------------
+// ---- 4. Diff ---------------------------------------------------------------
 function clip(s) {
   s = String(s == null ? "" : s).replace(/\s+/g, " ").trim();
   return s.length > CUT ? s.slice(0, CUT) + "…" : s;
@@ -287,7 +291,7 @@ function diffLines() {
     if (e.kind === "text") {
       const now = raw(e.node.nodeValue);
       if (now !== e.old) {
-        out.push(e.path + " текст: «" + clip(e.old) + "» → «" + clip(now) + "»");
+        out.push(e.path + " text: «" + clip(e.old) + "» → «" + clip(now) + "»");
       }
     } else if (e.kind === "attr") {
       const now = raw(e.node.getAttribute ? e.node.getAttribute(e.name) : null);
@@ -297,7 +301,7 @@ function diffLines() {
     } else if (e.kind === "field") {
       const now = raw(fieldValue(e.node));
       if (now !== e.old) {
-        out.push(e.path + (e.check ? " галочка: «" : " поле: «") +
+        out.push(e.path + (e.check ? " checkbox: «" : " field: «") +
                  clip(e.old) + "» → «" + clip(now) + "»");
       }
     }
@@ -312,23 +316,23 @@ function diffLines() {
   if (out.length > MAX_DIFF) {
     const n = out.length;
     out.length = MAX_DIFF;
-    out.push("… ещё " + (n - MAX_DIFF) + " правок не показано");
+    out.push("… " + (n - MAX_DIFF) + " more edit(s) not shown");
   }
   return out;
 }
 
-// Атомарный блок (§6): ни одного await между добором записей и снятием
-// аннотаций. Иначе человек успеет набрать в промежутке, и текст пропадёт.
+// Atomic block (§6): not one await between draining records and stripping the
+// notes. Otherwise the human types in the gap and the text is lost.
 function takeDiff() {
-  drain();                       // 1. добираем правки человека последнего такта
-  const lines = diffLines();     // 2. собираем диф и чистим буферы
-  execWindow = true;             // 3. снятие аннотаций — правка системы, не человека
+  drain();                       // 1. pick up the human's last-tick edits
+  const lines = diffLines();     // 2. assemble the diff and clear the buffers
+  execWindow = true;             // 3. stripping notes is a system edit, not a human one
   let asks;
   try {
     asks = collectAsks();
-    reseat();                    // §6: пересев базовой линии — в том же блоке
+    reseat();                    // §6: reseat the baseline in the same block
   } finally {
-    drain();                     // execWindow ещё true → записи об удалении в мусор
+    drain();                     // execWindow still true → removal records to the bin
     execWindow = false;
   }
   updateCount();
@@ -337,12 +341,12 @@ function takeDiff() {
 
 function turnMessage(d) {
   const parts = [];
-  if (d.asks.length)  parts.push("ИНСТРУКЦИИ (" + d.asks.length + "):\n" + d.asks.join("\n"));
-  if (d.lines.length) parts.push("ПРАВКИ ДОКУМЕНТА (" + d.lines.length + "):\n" + d.lines.join("\n"));
-  return parts.length ? parts.join("\n\n") : "Человек отправил ход, ничего не изменив.";
+  if (d.asks.length)  parts.push("INSTRUCTIONS (" + d.asks.length + "):\n" + d.asks.join("\n"));
+  if (d.lines.length) parts.push("DOCUMENT EDITS (" + d.lines.length + "):\n" + d.lines.join("\n"));
+  return parts.length ? parts.join("\n\n") : "The human submitted a turn without changing anything.";
 }
 
-// ---- 5. Исполнение ---------------------------------------------------------
+// ---- 5. Execution ----------------------------------------------------------
 function serialize(v) {
   if (v === undefined) return "ok";
   if (typeof v === "string") return v;
@@ -366,7 +370,7 @@ function serialize(v) {
 function cut(s) {
   s = String(s);
   return s.length > MAX_RESULT
-    ? s.slice(0, MAX_RESULT) + "\n… обрезано, всего " + s.length + " симв."
+    ? s.slice(0, MAX_RESULT) + "\n… truncated, " + s.length + " chars total"
     : s;
 }
 
@@ -374,10 +378,10 @@ function errText(e) {
   const name = e && e.name ? e.name : "Error";
   const msg  = e && e.message ? e.message : String(e);
   const head = name + ": " + msg;
-  // Режем не только число строк стека, но и каждую по длине: кадр бывает
-  // произвольно длинным (у страницы, открытой как data:, в него попадает весь
-  // исходник), и тогда модель получит MAX_RESULT символов мусора вместо
-  // диагноза — а вместе с ним и всё, что в исходнике лежит.
+  // Cap not just the number of stack lines but each line's length: a frame can
+  // be arbitrarily long (on a page served as data: it carries the entire
+  // source), and the model would then get MAX_RESULT characters of noise
+  // instead of a diagnosis — along with everything the source contains.
   const st = e && e.stack
     ? String(e.stack).split("\n").slice(1, 4)
         .map(function (l) { return l.length > CUT ? l.slice(0, CUT) + "…" : l; })
@@ -399,12 +403,14 @@ async function runTool(code) {
   } catch (e) {
     return { text: cut(errText(e)), err: e };
   } finally {
-    drain();            // §4.2: колбэк наблюдателя асинхронный — доберём и выбросим
-    execWindow = false; // до снятия флага, иначе правки модели спишутся на человека
+    drain();            // §4.2: the observer callback is async — drain and discard
+    execWindow = false; // BEFORE lowering the flag, or model edits land on the human
   }
 }
 
 function checkFrame() {
+  // Every scaffolding node, not just the containers: #debug.innerHTML = ""
+  // leaves the container connected while log() writes into a detached #log.
   const parts = [["app", app], ["store", store], ["io", io], ["debug", debugEl],
                  ["log", logEl], ["state", stateEl], ["count", countEl],
                  ["send", sendBtn], ["stop", stopBtn]];
@@ -413,45 +419,45 @@ function checkFrame() {
     if (document.getElementById(id) !== node || !node.isConnected) { ok = false; break; }
   }
   if (!ok) {
-    alert("Каркас страницы разрушен. Перезагружаю.");
+    alert("Page scaffolding destroyed. Reloading.");
     location.reload();
   }
   return ok;
 }
 
-// ---- 6. Петля --------------------------------------------------------------
-const SYSTEM = `Ты работаешь внутри одной HTML-страницы. Твоё единственное действие — инструмент page_exec: он выполняет переданный JavaScript в этой странице и возвращает тебе то значение, которое вернул код.
+// ---- 6. Loop ---------------------------------------------------------------
+const SYSTEM = `You live inside a single HTML page. Your only action is the page_exec tool: it runs the JavaScript you pass in this page and returns to you whatever value the code returned.
 
-Код исполняется как тело async-функции. Чтобы увидеть значение, верни его через return: без return ты получишь "ok" и решишь, что вызов удался, ничего не прочитав. await доступен.
+The code runs as the body of an async function. To see a value you must return it: without a return you get "ok" and will conclude the call succeeded while having read nothing. await is available.
 
-Снимок страницы тебе не присылают никогда. Нужно знать состояние — прочитай его сам вызовом page_exec.
+You are never sent a snapshot of the page. If you need to know the state, read it yourself with page_exec.
 
-Карта страницы:
-- #app — канва, contenteditable. Это одновременно документ человека и твой ответ ему. Ответ человеку — то, что записано сюда, а не текст твоего сообщения.
-- #store — скрытый слой данных (hidden). Состояние держи здесь, а не в вёрстке #app.
-- #io и #debug — каркас системы. Не трогай их и не трогай body целиком.
+Page map:
+- #app — the canvas, contenteditable. It is at once the human's document and your answer to them. Your answer to the human is what is written here, not the text of your message.
+- #store — a hidden data layer (hidden attribute). Keep state here, not in #app markup.
+- #io and #debug — the system scaffolding. Do not touch them, and do not touch body as a whole.
 
-Ход человека приходит двумя разделами:
-- ИНСТРУКЦИИ — задание, привязанное к узлу. Это то, что от тебя хотят.
-- ПРАВКИ ДОКУМЕНТА — новое состояние текста после правок человека. Обычно контекст, действия не требует.
-Аннотации к этому моменту уже сняты со страницы, восстанавливать их не нужно.
+A human turn arrives in two sections:
+- INSTRUCTIONS — a task anchored to a node. This is what is wanted from you.
+- DOCUMENT EDITS — the new state of the text after the human's edits. Usually context; it needs no action.
+Notes have already been stripped from the page by this point; do not restore them.
 
-Правила:
-- Состояние переживает ход. Не перевыводи то, что уже записано на странице.
-- Вешай id на узлы, которые собираешься читать в следующих ходах.
-- #app редактируем целиком, и это ценно: человек правит текст руками, а ты получаешь его правки разделом ПРАВКИ ДОКУМЕНТА. Не отнимай у него эту возможность.
-- contenteditable="false" ставь на САМ интерактивный элемент — кнопку, input, select — и только на него, иначе клик поставит каретку вместо нажатия.
-- Атрибут наследуется: contenteditable="false" на контейнере отключает правку всего, что внутри. Никогда не вешай его на абзац, список, таблицу или ячейку — человек перестанет их редактировать. Если внутри нередактируемого островка нужно редактируемое поле, поставь на него contenteditable="true" явно.
-- Текст, который человеку предстоит править, оставляй редактируемым и вешай на него id, чтобы прочитать потом.
-- Всегда проверяй результат querySelector на null: каретка человека ломает структуру и уносит id.
-- Текст, набранный человеком в input, живёт в свойстве .value, а не в разметке — в outerHTML его не видно. Читай .value и .checked.
-- Если код бросил исключение, ты получишь его текстом. Это штатный способ починиться: поправь код и повтори.`;
+Rules:
+- State survives the turn. Do not re-emit what is already written on the page.
+- Put an id on any node you intend to read in a later turn.
+- #app is editable throughout, and that is valuable: the human edits text by hand and you receive those edits as the DOCUMENT EDITS section. Do not take that away from them.
+- Put contenteditable="false" on the interactive element ITSELF — a button, input, select — and only on it, or a click will place the caret instead of pressing it.
+- The attribute is inherited: contenteditable="false" on a container disables editing of everything inside. Never put it on a paragraph, list, table or cell — the human will stop being able to edit them. If a non-editable island needs an editable field inside, put contenteditable="true" on that field explicitly.
+- Text the human is meant to edit must stay editable, and carry an id so you can read it back.
+- Always check the result of querySelector against null: the human's caret breaks structure and carries ids away with it.
+- Text the human types into an input lives in the .value property, not in the markup — outerHTML does not show it. Read .value and .checked.
+- If your code throws, you get the exception as text. That is the normal way to repair yourself: fix the code and retry.`;
 
 const TOOLS = [{
   type: "function",
   function: {
     name: "page_exec",
-    description: "Выполнить JavaScript в текущей странице. Код исполняется как тело async-функции: возвращай результат через return, иначе получишь \"ok\". Доступен await.",
+    description: "Run JavaScript in the current page. The code runs as the body of an async function: return your result, or you get \"ok\". await is available.",
     parameters: {
       type: "object",
       properties: { code: { type: "string" } },
@@ -466,18 +472,19 @@ let ctl = null;
 
 function setBusy(v) {
   busy = v;
-  stateEl.textContent = v ? "работает" : "готов";
+  stateEl.textContent = v ? "working" : "ready";
   sendBtn.disabled = v;
   stopBtn.disabled = !v;
-  // Канва только для чтения на время хода. Правка, сделанная внутри окна
-  // исполнения, спишется на модель и пропадёт молча (§10, гонка авторства):
-  // текст в DOM изменится, а диф скажет «ничего не изменив». Запретить
-  // дешевле, чем потерять.
-  // Аннотации при этом работают: <aside> несёт собственный
-  // contenteditable="true", а его текст читается из DOM при коммите, а не из
-  // буфера наблюдателя, — и ход переживает.
-  // Смена атрибута — работа системы, поэтому внутри окна: иначе наблюдатель
-  // положит её в буфер и счётчик покажет человеку правку, которой он не делал.
+  // The canvas is read-only for the duration of a turn. An edit made inside the
+  // execution window would be attributed to the model and vanish silently
+  // (§10, authorship race): the DOM changes while the diff says "nothing
+  // changed". Forbidding is cheaper than losing.
+  // Notes still work: <aside> carries its own contenteditable="true", and its
+  // text is read from the DOM at commit time rather than from the observer
+  // buffer — so it survives the turn.
+  // Flipping the attribute is the system's own edit, hence inside the window:
+  // otherwise the observer buffers it and the counter shows the human an edit
+  // they never made.
   const prev = execWindow;
   execWindow = true;
   try { app.contentEditable = v ? "false" : "true"; }
@@ -500,14 +507,14 @@ async function callModel(extra) {
   return await r.json();
 }
 
-// Ход может оборваться посреди пачки вызовов, а messages переживает ход.
-// Вызов без ответного tool-сообщения делает КАЖДЫЙ следующий запрос сессии
-// невалидным: провайдер видит assistant.tool_calls, на который не хватает
-// ответов, и отвечает 400 на ходах, выглядящих непричастными.
+// A turn can end mid-batch while `messages` outlives the turn. A call left
+// without its tool reply makes EVERY subsequent request of the session invalid:
+// the provider sees assistant.tool_calls with too few answers and returns 400
+// on turns that look unrelated.
 function closeBatch(calls, after) {
   for (const rest of calls.slice(calls.indexOf(after) + 1)) {
     messages.push({ role: "tool", tool_call_id: rest.id || "unknown",
-                    content: "Ход завершён принудительно, вызов не выполнен." });
+                    content: "Turn ended early; this call was not executed." });
   }
 }
 
@@ -520,65 +527,66 @@ async function runTurn() {
     if (last) {
       messages.push({
         role: "user",
-        content: "Лимит итераций исчерпан. Заверши ход: коротко скажи, что сделано и что осталось."
+        content: "Iteration limit reached. Wrap up the turn: briefly say what is done and what is left."
       });
-      log("предел", "MAX_ITERS исчерпан, финальный вызов с tool_choice: none");
+      log("limit", "MAX_ITERS reached, final call with tool_choice: none");
     }
 
     const data = await callModel(last ? { tool_choice: "none" } : null);
     const ch = data.choices && data.choices[0];
-    if (!ch) { log("сбой", "ответ без choices: " + JSON.stringify(data).slice(0, 500)); return; }
+    if (!ch) { log("failure", "response without choices: " + JSON.stringify(data).slice(0, 500)); return; }
 
     const m = ch.message;
     if (!m) {
-      log("сбой", "ответ без message: " + JSON.stringify(ch).slice(0, 500));
+      log("failure", "response without message: " + JSON.stringify(ch).slice(0, 500));
       return;
     }
     const fin = ch.finish_reason;
     const calls = m.tool_calls || [];
     messages.push(m);
-    if (m.content) log("текст", m.content);
+    if (m.content) log("text", m.content);
 
-    // Отклонение от §7: критерий — непустой tool_calls. finish_reason у
-    // OpenAI-совместимых клонов часто врёт; расхождение фиксируем в журнале.
+    // Deviation from §7: the criterion is a non-empty tool_calls.
+    // OpenAI-compatible clones frequently lie about finish_reason; the
+    // disagreement is recorded in the log.
     if (calls.length && fin !== "tool_calls") {
-      log("провайдер", "tool_calls непуст, но finish_reason = " + fin);
+      log("provider", "tool_calls non-empty but finish_reason = " + fin);
     }
-    if (!calls.length) { log("ход", "завершён, finish_reason = " + fin); return; }
+    if (!calls.length) { log("turn", "done, finish_reason = " + fin); return; }
 
     for (const c of calls) {
       let code = null;
       try {
         code = JSON.parse(c.function.arguments).code;
       } catch (e) {
-        const out = "Не удалось разобрать аргументы вызова: " + errText(e) +
-                    "\nВероятно, ответ оборвался по лимиту токенов. Пришли код короче.";
-        log("аргументы", out);
+        const out = "Could not parse the call arguments: " + errText(e) +
+                    "\nThe response was probably cut off by the token limit. Send shorter code.";
+        log("arguments", out);
         messages.push({ role: "tool", tool_call_id: c.id || "unknown", content: out });
         continue;
       }
 
-      // Аргументы разобрались, но поля code нет: runTool(undefined) вернул бы
-      // "ok", и модель сочла бы вызов успешным. Снимка страницы она не получает
-      // и уличить ложь не сможет.
+      // Arguments parsed but there is no code field: runTool(undefined) would
+      // return "ok" and the model would take the call for a success. It gets no
+      // snapshot of the page and cannot catch the lie.
       if (typeof code !== "string") {
-        const out = "В аргументах вызова нет строкового поля code. " +
-                    "Повтори вызов, положив код в поле code.";
-        log("аргументы", out);
+        const out = "The call arguments have no string field `code`. " +
+                    "Retry the call with the code in the `code` field.";
+        log("arguments", out);
         messages.push({ role: "tool", tool_call_id: c.id || "unknown", content: out });
         continue;
       }
 
       log("exec", code);
       const res = await runTool(code);
-      log(res.err ? "ошибка" : "результат", res.text);
+      log(res.err ? "error" : "result", res.text);
       messages.push({ role: "tool", tool_call_id: c.id || "unknown", content: res.text });
 
       if (res.err) {
         const sig = (res.err.name || "Error") + ": " + (res.err.message || "");
         if (sig === lastSig) same++; else { lastSig = sig; same = 1; }
         if (same >= 3) {
-          log("стоп", "три одинаковых исключения подряд, ход завершён принудительно");
+          log("stop", "three identical exceptions in a row, turn ended by force");
           closeBatch(calls, c);
           return;
         }
@@ -594,39 +602,41 @@ async function runTurn() {
 }
 
 async function commit() {
-  if (busy) { log("занято", "ход уже идёт, отправка пропущена"); return; }
+  if (busy) { log("busy", "a turn is already running, send skipped"); return; }
   const msg = turnMessage(takeDiff());
-  log("ход", msg);
+  log("turn", msg);
   messages.push({ role: "user", content: msg });
   ctl = new AbortController();
   setBusy(true);
   try {
     await runTurn();
   } catch (e) {
-    if (e && e.name === "AbortError") log("стоп", "ход прерван человеком");
-    else log("сбой", errText(e));
+    if (e && e.name === "AbortError") log("stop", "turn aborted by the human");
+    else log("failure", errText(e));
   } finally {
     setBusy(false);
     ctl = null;
   }
 }
 
-// ---- 7. Привязки -----------------------------------------------------------
+// ---- 7. Bindings -----------------------------------------------------------
 app.addEventListener("contextmenu", function (e) {
-  if (e.shiftKey) return;            // Shift оставляет родное меню браузера
+  if (e.shiftKey) return;            // Shift leaves the browser's own menu
   e.preventDefault();
   addAsk();
 });
 
 app.addEventListener("keydown", function (e) {
+  // By physical key: on a non-Latin layout e.key for Slash is not "/"
   if ((e.ctrlKey || e.metaKey) && e.code === "Slash") { e.preventDefault(); addAsk(); }
 });
 
-// Escape — на document, а не на #app: у свежесозданного пустого <aside> фокус
-// остаётся на <body> (aside.focus() на пустом contenteditable не срабатывает),
-// и до слушателя на #app событие тогда не доходит вовсе. Аннотацию ищем по
-// каретке, а не только по цели события, по той же причине: выделение стоит
-// внутри аннотации даже когда activeElement — <body>.
+// Escape is bound on document, not on #app: a freshly created empty <aside>
+// leaves focus on <body> (aside.focus() does not take on an empty
+// contenteditable), and the listener on #app would never see the event. The
+// note is located by the caret rather than only by the event target, for the
+// same reason: the selection sits inside the note even when activeElement is
+// <body>.
 document.addEventListener("keydown", function (e) {
   if (e.key !== "Escape") return;
   let a = e.target && e.target.closest ? e.target.closest("[data-ask]") : null;
@@ -638,7 +648,7 @@ document.addEventListener("keydown", function (e) {
   }
   if (a && app.contains(a) && !a.textContent.trim()) {
     e.preventDefault();
-    a.remove();          // удаление аннотации в диф не идёт: inAsk ловит сам узел
+    a.remove();          // removing a note stays out of the diff: inAsk catches the node
     app.focus();
     updateCount();
   }
@@ -654,5 +664,5 @@ sendBtn.addEventListener("click", function () { commit(); });
 
 stopBtn.addEventListener("click", function () { if (ctl) ctl.abort(); });
 
-log("старт", "каркас поднят");
+log("start", "scaffolding up");
 </script>
