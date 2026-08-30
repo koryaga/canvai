@@ -89,6 +89,11 @@ function inAsk(node) {
   return !!(el && el.closest && el.closest("[data-ask]"));
 }
 
+// Сырое значение для СРАВНЕНИЯ. clip() режет на CUT и схлопывает пробелы, и
+// две по-настоящему разные строки, расходящиеся после 200-го символа, дают
+// равенство — правка человека молча пропадает. Клипаем только на вывод.
+function raw(v) { return v == null ? "" : String(v); }
+
 // §4.6: #id, если есть; иначе путь tag:nth-of-type(n) вверх до ближайшего
 // предка с id, с префиксом #app. Текстовый узел адресуется родителем.
 function pathOf(node) {
@@ -125,11 +130,20 @@ function process(records) {
       for (const n of r.addedNodes)   { if (!inAsk(n)) adds.push({ where: pathOf(r.target), what: nodeBrief(n) }); }
       for (const n of r.removedNodes) { if (!inAsk(n)) dels.push({ where: pathOf(r.target), what: nodeBrief(n) }); }
     } else if (r.type === "characterData") {
-      const k = "text|" + pathOf(r.target);
-      if (!buf.has(k)) buf.set(k, { kind: "text", path: pathOf(r.target), node: r.target, old: clip(r.oldValue) });
+      // Ключ — сам узел, а не путь: pathOf адресует текстовый узел родителем,
+      // и два текстовых потомка одного элемента (<p>начало <b>ж</b> конец</p>)
+      // схлопнулись бы в один ключ, потеряв вторую правку без следа.
+      if (!buf.has(r.target)) {
+        buf.set(r.target, { kind: "text", path: pathOf(r.target), node: r.target,
+                            old: raw(r.oldValue) });
+      }
     } else if (r.type === "attributes") {
+      // Элементы адресуются путём однозначно, здесь коллизии нет.
       const k = "attr|" + pathOf(r.target) + "|" + r.attributeName;
-      if (!buf.has(k)) buf.set(k, { kind: "attr", path: pathOf(r.target), node: r.target, name: r.attributeName, old: clip(r.oldValue) });
+      if (!buf.has(k)) {
+        buf.set(k, { kind: "attr", path: pathOf(r.target), node: r.target,
+                     name: r.attributeName, old: raw(r.oldValue) });
+      }
     }
   }
   updateCount();
@@ -164,7 +178,8 @@ function topLevel(node) {
 }
 
 function addAsk() {
-  execWindow = true;                 // весь DOM-труд addAsk — работа системы
+  drain();                           // чужие записи забираем ДО подъёма окна,
+  execWindow = true;                 // иначе finally выбросит их вместе со своими
   try {
     const sel = document.getSelection();
     const from = sel && sel.anchorNode && app.contains(sel.anchorNode) ? sel.anchorNode : null;
@@ -227,11 +242,15 @@ function diffLines() {
   const out = [];
   for (const e of buf.values()) {
     if (e.kind === "text") {
-      const now = clip(e.node.nodeValue);
-      if (now !== e.old) out.push(e.path + " текст: «" + e.old + "» → «" + now + "»");
+      const now = raw(e.node.nodeValue);
+      if (now !== e.old) {
+        out.push(e.path + " текст: «" + clip(e.old) + "» → «" + clip(now) + "»");
+      }
     } else if (e.kind === "attr") {
-      const now = clip(e.node.getAttribute ? e.node.getAttribute(e.name) : "");
-      if (now !== e.old) out.push(e.path + " @" + e.name + ": «" + e.old + "» → «" + now + "»");
+      const now = raw(e.node.getAttribute ? e.node.getAttribute(e.name) : null);
+      if (now !== e.old) {
+        out.push(e.path + " @" + e.name + ": «" + clip(e.old) + "» → «" + clip(now) + "»");
+      }
     }
   }
   for (const a of adds) out.push(a.where + " + " + a.what);
