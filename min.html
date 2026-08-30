@@ -374,7 +374,15 @@ function errText(e) {
   const name = e && e.name ? e.name : "Error";
   const msg  = e && e.message ? e.message : String(e);
   const head = name + ": " + msg;
-  const st   = e && e.stack ? String(e.stack).split("\n").slice(1, 4).join("\n") : "";
+  // Режем не только число строк стека, но и каждую по длине: кадр бывает
+  // произвольно длинным (у страницы, открытой как data:, в него попадает весь
+  // исходник), и тогда модель получит MAX_RESULT символов мусора вместо
+  // диагноза — а вместе с ним и всё, что в исходнике лежит.
+  const st = e && e.stack
+    ? String(e.stack).split("\n").slice(1, 4)
+        .map(function (l) { return l.length > CUT ? l.slice(0, CUT) + "…" : l; })
+        .join("\n")
+    : "";
   return st ? head + "\n" + st : head;
 }
 
