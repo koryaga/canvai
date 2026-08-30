@@ -38,10 +38,10 @@
 "use strict";
 
 // ---- 0. Конфиг -------------------------------------------------------------
-const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const API_URL = "https://api.deepseek.com/v1/chat/completions";
 const API_KEY = "";   // min.html ОТСЛЕЖИВАЕТСЯ git. Ключ вписывать в копию
                       // min.local.html (она в .gitignore) либо очищать перед коммитом.
-const MODEL   = "nvidia/nemotron-3-ultra-550b-a55b:free";
+const MODEL   = "deepseek-v4-flash";
 
 const MAX_ITERS  = 12;
 const MAX_RESULT = 4000;
@@ -473,7 +473,12 @@ function setBusy(v) {
   // Аннотации при этом работают: <aside> несёт собственный
   // contenteditable="true", а его текст читается из DOM при коммите, а не из
   // буфера наблюдателя, — и ход переживает.
-  app.contentEditable = v ? "false" : "true";
+  // Смена атрибута — работа системы, поэтому внутри окна: иначе наблюдатель
+  // положит её в буфер и счётчик покажет человеку правку, которой он не делал.
+  const prev = execWindow;
+  execWindow = true;
+  try { app.contentEditable = v ? "false" : "true"; }
+  finally { drain(); execWindow = prev; }
 }
 
 async function callModel(extra) {
@@ -611,11 +616,28 @@ app.addEventListener("contextmenu", function (e) {
 });
 
 app.addEventListener("keydown", function (e) {
-  if ((e.ctrlKey || e.metaKey) && e.code === "Slash") { e.preventDefault(); addAsk(); return; }
-  if (e.key === "Escape") {
-    const t = e.target;
-    const a = t && t.closest ? t.closest("[data-ask]") : null;
-    if (a && !a.textContent.trim()) { e.preventDefault(); a.remove(); app.focus(); updateCount(); }
+  if ((e.ctrlKey || e.metaKey) && e.code === "Slash") { e.preventDefault(); addAsk(); }
+});
+
+// Escape — на document, а не на #app: у свежесозданного пустого <aside> фокус
+// остаётся на <body> (aside.focus() на пустом contenteditable не срабатывает),
+// и до слушателя на #app событие тогда не доходит вовсе. Аннотацию ищем по
+// каретке, а не только по цели события, по той же причине: выделение стоит
+// внутри аннотации даже когда activeElement — <body>.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  let a = e.target && e.target.closest ? e.target.closest("[data-ask]") : null;
+  if (!a) {
+    const sel = document.getSelection();
+    const n = sel ? sel.anchorNode : null;
+    const el = n ? (n.nodeType === 1 ? n : n.parentElement) : null;
+    a = el && el.closest ? el.closest("[data-ask]") : null;
+  }
+  if (a && app.contains(a) && !a.textContent.trim()) {
+    e.preventDefault();
+    a.remove();          // удаление аннотации в диф не идёт: inAsk ловит сам узел
+    app.focus();
+    updateCount();
   }
 });
 
