@@ -11,16 +11,15 @@ One file, `min.html`. No build, no server, no dependencies.
 
 ## Run
 
-```bash
-cp min.html min.local.html
-```
+Put your API key into `API_KEY` at the top of `min.html`, then open the file by
+double-click. That is the whole setup — there is no second copy of the file.
 
-Put your API key into `API_KEY` in `min.local.html` — that copy is gitignored.
-`API_URL` and `MODEL` are already filled in; any OpenAI-compatible endpoint
-works. Then open the file by double-click.
+`API_URL` and `MODEL` default to OpenRouter and a free model
+(`nvidia/nemotron-3-ultra-550b-a55b:free`). Any OpenAI-compatible endpoint works;
+switching is a one-constant edit.
 
-Never put the key in `min.html`: it is tracked, and a pre-commit hook will refuse
-the commit.
+The key lives in your working copy only. Blank it before committing — `min.html`
+is tracked, and a pre-commit hook refuses any commit that carries a key.
 
 ## Use
 

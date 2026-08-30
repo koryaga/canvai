@@ -30,9 +30,11 @@ any of those, it is the wrong change.
 system prompt, UI labels, log prefixes, turn sections. The only Russian is what
 the human types on the canvas.
 
-**Secrets.** `min.html` is tracked and ships with `API_KEY = ""`. The working
-copy is `min.local.html` (gitignored). A `pre-commit` hook rejects any `sk-…` in
-the index — it exists because a key was once committed. Do not disable it.
+**Secrets.** `min.html` is tracked and ships with `API_KEY = ""`. Paste your key
+straight into it to run, and blank it before committing. A `pre-commit` hook
+rejects any `sk-…` in the index — it exists because a key was once committed. Do
+not disable it. There is no second copy of the file and no other place a key
+belongs.
 
 ## Page topology
 
@@ -172,7 +174,8 @@ Before claiming a change works, exercise at least: coalescing keeps the *first*
 old value; a model edit via `runTool` produces "nothing changed"; a note produces
 INSTRUCTIONS and no DOCUMENT EDITS section.
 
-**Verified live:** DeepSeek and OpenRouter both work from an opaque origin —
+**Verified live:** the default is OpenRouter with
+`nvidia/nemotron-3-ultra-550b-a55b:free`. It and DeepSeek both work from an opaque origin —
 `Origin: null` is accepted, so a `file://` page reaches them. Free-tier models do
 support tool calling here. A generic `Failed to fetch` with no CORS message in
 the console is a socket-level or extension problem, not an origin problem.

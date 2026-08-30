@@ -239,15 +239,16 @@ const MODEL   = "";
 ```
 
 `API_URL` and `MODEL` are committed filled in. The only secret is `API_KEY`, and
-`min.html` **is tracked by git**: the key goes into the `min.local.html` copy
-(gitignored) or is blanked before committing. Claiming "it does not leave" about
-a file that does leave is not acceptable — the human reads that line at the exact
-moment they paste a paid key. There is no storage: the key is never saved and
-never read back.
+`min.html` **is tracked by git**: the key is pasted straight into it to run and
+blanked before committing, with a pre-commit hook refusing any commit that
+carries one. There is no second copy of the file — one file is the whole point.
+Claiming "it does not leave" about a file that does leave is not acceptable: the
+human reads that line at the exact moment they paste a paid key. There is no
+storage either — the key is never saved and never read back.
 
-Verified against OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`) and
-DeepSeek (`deepseek-v4-flash`). Both accept an opaque origin, and free-tier
-models did support tool calling. A free endpoint is nonetheless a direct
+The default is OpenRouter with `nvidia/nemotron-3-ultra-550b-a55b:free`.
+Verified there and against DeepSeek (`deepseek-v4-flash`); both accept an opaque
+origin, and free-tier models did support tool calling. A free endpoint is nonetheless a direct
 candidate for the "free models and tool calling" gotcha in §10; switching models
 on failure is a one-constant edit.
 

@@ -38,10 +38,11 @@
 "use strict";
 
 // ---- 0. Config -------------------------------------------------------------
-const API_URL = "https://api.deepseek.com/v1/chat/completions";
-const API_KEY = "";   // min.html IS TRACKED by git. Put the working key in the
-                      // min.local.html copy (gitignored), or blank it before committing.
-const MODEL   = "deepseek-v4-flash";
+const API_URL = "https://openrouter.ai/api/v1/chat/completions";
+const API_KEY = "";   // min.html IS TRACKED by git: paste your key here to run,
+                      // blank it before committing. A pre-commit hook refuses any
+                      // commit that carries one.
+const MODEL   = "openrouter/free";
 
 const MAX_ITERS  = 12;
 const MAX_RESULT = 4000;
