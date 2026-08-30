@@ -39,7 +39,8 @@
 
 // ---- 0. Конфиг -------------------------------------------------------------
 const API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const API_KEY = "";   // вписывает человек, в git не уходит
+const API_KEY = "";   // min.html ОТСЛЕЖИВАЕТСЯ git. Ключ вписывать в копию
+                      // min.local.html (она в .gitignore) либо очищать перед коммитом.
 const MODEL   = "nvidia/nemotron-3-ultra-550b-a55b:free";
 
 const MAX_ITERS  = 12;
@@ -220,8 +221,9 @@ function topLevel(node) {
 
 function addAsk() {
   drain();                           // чужие записи забираем ДО подъёма окна,
-  execWindow = true;                 // иначе finally выбросит их вместе со своими
-  try {
+  const prevWindow = execWindow;     // ход модели мог поднять окно: канва во
+  execWindow = true;                 // время хода не заблокирована, человек
+  try {                              // может поставить аннотацию посреди него
     const sel = document.getSelection();
     const from = sel && sel.anchorNode && app.contains(sel.anchorNode) ? sel.anchorNode : null;
     let anchor = from ? topLevel(from) : null;
@@ -258,7 +260,7 @@ function addAsk() {
     return aside;
   } finally {
     drain();                         // записи о собственных правках — в мусор
-    execWindow = false;
+    execWindow = prevWindow;
   }
 }
 
@@ -395,11 +397,13 @@ async function runTool(code) {
 }
 
 function checkFrame() {
-  const ok = document.getElementById("app")   === app
-          && document.getElementById("store") === store
-          && document.getElementById("io")    === io
-          && document.getElementById("debug") === debugEl
-          && app.isConnected && store.isConnected && io.isConnected && debugEl.isConnected;
+  const parts = [["app", app], ["store", store], ["io", io], ["debug", debugEl],
+                 ["log", logEl], ["state", stateEl], ["count", countEl],
+                 ["send", sendBtn], ["stop", stopBtn]];
+  let ok = true;
+  for (const [id, node] of parts) {
+    if (document.getElementById(id) !== node || !node.isConnected) { ok = false; break; }
+  }
   if (!ok) {
     alert("Каркас страницы разрушен. Перезагружаю.");
     location.reload();
@@ -409,6 +413,8 @@ function checkFrame() {
 
 // ---- 6. Петля --------------------------------------------------------------
 const SYSTEM = `Ты работаешь внутри одной HTML-страницы. Твоё единственное действие — инструмент page_exec: он выполняет переданный JavaScript в этой странице и возвращает тебе то значение, которое вернул код.
+
+Код исполняется как тело async-функции. Чтобы увидеть значение, верни его через return: без return ты получишь "ok" и решишь, что вызов удался, ничего не прочитав. await доступен.
 
 Снимок страницы тебе не присылают никогда. Нужно знать состояние — прочитай его сам вызовом page_exec.
 
@@ -434,7 +440,7 @@ const TOOLS = [{
   type: "function",
   function: {
     name: "page_exec",
-    description: "Выполнить JavaScript в текущей странице. Возвращает значение, которое вернул код.",
+    description: "Выполнить JavaScript в текущей странице. Код исполняется как тело async-функции: возвращай результат через return, иначе получишь \"ok\". Доступен await.",
     parameters: {
       type: "object",
       properties: { code: { type: "string" } },
@@ -499,7 +505,11 @@ async function runTurn() {
     const ch = data.choices && data.choices[0];
     if (!ch) { log("сбой", "ответ без choices: " + JSON.stringify(data).slice(0, 500)); return; }
 
-    const m = ch.message || {};
+    const m = ch.message;
+    if (!m) {
+      log("сбой", "ответ без message: " + JSON.stringify(ch).slice(0, 500));
+      return;
+    }
     const fin = ch.finish_reason;
     const calls = m.tool_calls || [];
     messages.push(m);
@@ -560,7 +570,7 @@ async function runTurn() {
 }
 
 async function commit() {
-  if (busy) return;
+  if (busy) { log("занято", "ход уже идёт, отправка пропущена"); return; }
   const msg = turnMessage(takeDiff());
   log("ход", msg);
   messages.push({ role: "user", content: msg });
@@ -585,7 +595,7 @@ app.addEventListener("contextmenu", function (e) {
 });
 
 app.addEventListener("keydown", function (e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === "/") { e.preventDefault(); addAsk(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.code === "Slash") { e.preventDefault(); addAsk(); return; }
   if (e.key === "Escape") {
     const t = e.target;
     const a = t && t.closest ? t.closest("[data-ask]") : null;
