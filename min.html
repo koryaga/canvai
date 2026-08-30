@@ -164,40 +164,46 @@ function topLevel(node) {
 }
 
 function addAsk() {
-  const sel = document.getSelection();
-  const from = sel && sel.anchorNode && app.contains(sel.anchorNode) ? sel.anchorNode : null;
-  let anchor = from ? topLevel(from) : null;
-  // Голый текстовый узел прямо в #app: так Chrome держит первую строку, пока
-  // человек не нажал Enter. Прямого потомка-элемента нет, а якорю нужен узел,
-  // который унесёт id — оборачиваем в <p> на месте.
-  if (!anchor && from && from.nodeType === 3 && from.parentNode === app) {
-    anchor = document.createElement("p");
-    from.before(anchor);
-    anchor.appendChild(from);
-  }
-  if (!anchor) anchor = app.lastElementChild;
-  if (!anchor) {
-    anchor = document.createElement("p");
-    anchor.textContent = " ";
-    app.appendChild(anchor);
-  }
-  if (anchor.matches("[data-ask]")) return;
+  execWindow = true;                 // весь DOM-труд addAsk — работа системы
+  try {
+    const sel = document.getSelection();
+    const from = sel && sel.anchorNode && app.contains(sel.anchorNode) ? sel.anchorNode : null;
+    let anchor = from ? topLevel(from) : null;
+    // Голый текстовый узел прямо в #app: так Chrome держит первую строку, пока
+    // человек не нажал Enter. Прямого потомка-элемента нет, а якорю нужен узел,
+    // который унесёт id — оборачиваем в <p> на месте.
+    if (!anchor && from && from.nodeType === 3 && from.parentNode === app) {
+      anchor = document.createElement("p");
+      from.before(anchor);
+      anchor.appendChild(from);
+    }
+    if (!anchor) anchor = app.lastElementChild;
+    if (!anchor) {
+      anchor = document.createElement("p");
+      anchor.textContent = " ";
+      app.appendChild(anchor);
+    }
+    if (anchor.matches("[data-ask]")) return;
 
-  const id = ensureId(anchor);
-  const aside = document.createElement("aside");
-  aside.setAttribute("data-ask", "#" + id);
-  aside.setAttribute("contenteditable", "true");
-  anchor.after(aside);
+    const id = ensureId(anchor);
+    const aside = document.createElement("aside");
+    aside.setAttribute("data-ask", "#" + id);
+    aside.setAttribute("contenteditable", "true");
+    anchor.after(aside);
 
-  const r = document.createRange();
-  r.selectNodeContents(aside);
-  r.collapse(true);
-  const s = document.getSelection();
-  s.removeAllRanges();
-  s.addRange(r);
-  aside.focus();
-  updateCount();
-  return aside;
+    const r = document.createRange();
+    r.selectNodeContents(aside);
+    r.collapse(true);
+    const s = document.getSelection();
+    s.removeAllRanges();
+    s.addRange(r);
+    aside.focus();
+    updateCount();
+    return aside;
+  } finally {
+    drain();                         // записи о собственных правках — в мусор
+    execWindow = false;
+  }
 }
 
 function collectAsks() {
